@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -103,21 +105,59 @@ func (cron *Cron) Add(job QorJobInterface) (err error) {
 			}
 		}
 
-		if scheduler, ok := job.GetArgument().(Scheduler); ok && scheduler.GetScheduleTime() != nil {
-			scheduleTime := scheduler.GetScheduleTime().In(time.Local)
-			job.SetStatus(JobStatusScheduled)
+		if scheduler, ok := job.GetArgument().(Scheduler); ok && (scheduler.GetScheduleTime() != nil || scheduler.GetRepeatTime() != nil) {
+			log.Printf("SCHEDULER: %+v", scheduler)
 
+			log.Printf("ST: %+v", scheduler.GetScheduleTime())
+			log.Printf("RT: %+v", scheduler.GetRepeatTime())
+
+			scheduleTime := scheduler.GetScheduleTime()
+			if scheduler.GetScheduleTime() != nil {
+				st := scheduler.GetScheduleTime().In(time.Local)
+				scheduleTime = &st
+			}
+
+			repeatTime := scheduler.GetRepeatTime()
+			if scheduleTime != nil && scheduleTime.IsZero() && repeatTime == nil {
+				execCommand(job, binaryFile, jobs, cron)
+				cron.Jobs = jobs
+				return
+			}
+
+			if (scheduleTime == nil || scheduleTime.IsZero()) && repeatTime != nil {
+				newTime := time.Now()
+				scheduleTime = &newTime
+			}
+
+			job.SetStatus(JobStatusScheduled)
+			minute := strconv.Itoa(scheduleTime.Minute())
+			hour := strconv.Itoa(scheduleTime.Hour())
+			day := strconv.Itoa(scheduleTime.Day())
+			month := fmt.Sprintf("%d", scheduleTime.Month())
+			if repeatTime != nil {
+				if *repeatTime >= time.Minute && *repeatTime < time.Hour {
+					minute = fmt.Sprintf("*/%d", int(repeatTime.Minutes()))
+					hour = "*"
+					day = "*"
+					month = "*"
+				}
+				if *repeatTime >= time.Hour && *repeatTime < (time.Hour*24) {
+					hour = fmt.Sprintf("*/%d", int(repeatTime.Hours()))
+					day = "*"
+					month = "*"
+				}
+				if *repeatTime >= (time.Hour*24) && *repeatTime <= (time.Hour*24*30) {
+					day = fmt.Sprintf("*/%d", int(repeatTime.Hours()/24))
+					month = "*"
+				}
+			}
 			currentPath, _ := os.Getwd()
 			jobs = append(jobs, &cronJob{
 				JobID:   job.GetJobID(),
-				Command: fmt.Sprintf("%d %d %d %d * cd %v; %v --qor-job %v\n", scheduleTime.Minute(), scheduleTime.Hour(), scheduleTime.Day(), scheduleTime.Month(), currentPath, binaryFile, job.GetJobID()),
+				Command: fmt.Sprintf("%s %s %s %s * cd %v; %v --qor-job %v\n", minute, hour, day, month, currentPath, binaryFile, job.GetJobID()),
 			})
 		} else {
-			cmd := exec.Command(binaryFile, "--qor-job", job.GetJobID())
-			if err = cmd.Start(); err == nil {
-				jobs = append(jobs, &cronJob{JobID: job.GetJobID(), Pid: cmd.Process.Pid})
-				cmd.Process.Release()
-			}
+			execCommand(job, binaryFile, jobs, cron)
 		}
 		cron.Jobs = jobs
 	}
@@ -157,6 +197,14 @@ func (cron *Cron) Run(qorJob QorJobInterface) error {
 			for _, cronJob := range cron.Jobs {
 				if cronJob.JobID == qorJob.GetJobID() {
 					cronJob.Delete = true
+				}
+				//add job if repeat time exists
+				if scheduler, ok := qorJob.GetArgument().(Scheduler); ok && scheduler.GetRepeatTime() != nil {
+					repeatTime := scheduler.GetRepeatTime()
+					newScheduleTime := time.Now().Add(*repeatTime)
+					qorJob.AddLog(fmt.Sprintf("--- repeating job ---, next run %s,  repeat %s", newScheduleTime, repeatTime))
+					qorJob.SetStatus(JobStatusScheduled)
+					cron.Add(qorJob)
 				}
 			}
 		}
@@ -200,4 +248,15 @@ func (cron *Cron) Remove(job QorJobInterface) error {
 		}
 	}
 	return errors.New("failed to find job")
+}
+
+func execCommand(job QorJobInterface, binaryFile string, jobs []*cronJob, cron *Cron) error {
+	var err error
+	cmd := exec.Command(binaryFile, "--qor-job", job.GetJobID())
+	if err := cmd.Start(); err == nil {
+		jobs = append(jobs, &cronJob{JobID: job.GetJobID(), Pid: cmd.Process.Pid})
+		cmd.Process.Release()
+	}
+	cron.Jobs = jobs
+	return err
 }

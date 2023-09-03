@@ -2,12 +2,14 @@ package worker
 
 import (
 	"errors"
-	"html/template"
 	"net/http"
+	"time"
 
-	"github.com/qor/admin"
-	"github.com/qor/responder"
-	"github.com/qor/roles"
+	"github.com/simonedbarber/go-template/html/template"
+
+	"github.com/simonedbarber/admin"
+	"github.com/simonedbarber/responder"
+	"github.com/simonedbarber/roles"
 )
 
 type workerController struct {
@@ -44,6 +46,10 @@ func (wc workerController) Update(context *admin.Context) {
 	if job, err := wc.GetJob(context.ResourceID); err == nil {
 		if job.GetStatus() == JobStatusScheduled || job.GetStatus() == JobStatusNew {
 			if job.GetJob().HasPermission(roles.Update, context.Context) {
+				defer writeError(context, job)
+				if !wc.checkRepeatTime(context) {
+					return
+				}
 				if context.AddError(wc.Worker.JobResource.Decode(context.Context, job)); !context.HasError() {
 					context.AddError(wc.Worker.JobResource.CallSave(job, context.Context))
 					context.AddError(wc.Worker.AddJob(job))
@@ -83,6 +89,8 @@ func (wc workerController) AddJob(context *admin.Context) {
 		context.AddError(wc.Worker.AddJob(result))
 	}
 
+	wc.checkRepeatTime(context)
+
 	if context.HasError() {
 		responder.With("html", func() {
 			context.Writer.WriteHeader(422)
@@ -106,6 +114,32 @@ func (wc workerController) RunJob(context *admin.Context) {
 	}
 
 	http.Redirect(context.Writer, context.Request, context.URLFor(wc.Worker.JobResource), http.StatusFound)
+}
+
+func (wc workerController) checkRepeatTime(context *admin.Context) bool {
+	repeatTime := context.Request.Form.Get("QorResource.SerializableMeta.RepeatTime")
+	if repeatTime != "" {
+		_, error := time.ParseDuration(repeatTime)
+		if error != nil {
+			context.AddError(errors.New("Invalid repeat time, allowed formats: (5m, 32h)"))
+			return false
+		}
+	}
+
+	return true
+}
+
+func writeError(context *admin.Context, data interface{}) {
+	if context.HasError() {
+		responder.With("html", func() {
+			context.Writer.WriteHeader(422)
+			context.Execute("edit", data)
+		}).With("json", func() {
+			context.Writer.WriteHeader(422)
+			context.JSON("index", map[string]interface{}{"errors": context.GetErrors()})
+		}).Respond(context.Request)
+		return
+	}
 }
 
 func (wc workerController) KillJob(context *admin.Context) {

@@ -1,6 +1,6 @@
 # Kubernetes Backend for QOR Worker
 
-This package provides [QOR worker](http://github.com/qor/worker)'s backend based on [Kubernetes Job](https://kubernetes.io/docs/concepts/workloads/controllers/jobs-run-to-completion/)
+This package provides [QOR worker](http://github.com/simonedbarber/worker)'s backend based on [Kubernetes Job](https://kubernetes.io/docs/concepts/workloads/controllers/jobs-run-to-completion/)
 
 ## Basic Usage
 

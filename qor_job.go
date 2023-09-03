@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jinzhu/gorm"
-	"github.com/qor/admin"
-	"github.com/qor/audited"
-	"github.com/qor/serializable_meta"
+	"github.com/simonedbarber/admin"
+	"github.com/simonedbarber/audited"
+	"github.com/simonedbarber/serializable_meta"
+	"gorm.io/gorm"
 )
 
 // QorJobInterface is a interface, defined methods that needs for a qor job
